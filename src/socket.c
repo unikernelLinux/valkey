@@ -136,8 +136,13 @@ static void connSocketShutdown(connection *conn) {
 
 /* Close the connection and free resources. */
 static void connSocketClose(connection *conn) {
+    struct event_data *ev_data;
     if (conn->fd != -1) {
-        aeDeleteFileEvent(server.el, conn->fd, AE_READABLE | AE_WRITABLE);
+        //aeDeleteFileEvent(server.el, conn->fd, AE_READABLE | AE_WRITABLE);
+	ev_data = (struct event_data *)conn->upcall_container;
+	// Call kernel unregister function
+	release_ukl_event(conn->kernel_data);
+	zfree(ev_data);
         close(conn->fd);
         conn->fd = -1;
     }
@@ -185,7 +190,7 @@ static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
     int ret = read(conn->fd, buf, buf_len);
     if (!ret) {
         conn->state = CONN_STATE_CLOSED;
-    } else if (ret < 0 && errno != EAGAIN) {
+    } else if (ret < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
         conn->last_errno = errno;
 
         /* Don't overwrite the state of a connection that is not already
@@ -231,6 +236,8 @@ static int connSocketSetWriteHandler(connection *conn, ConnectionCallbackFunc fu
     return C_OK;
 }
 
+void *do_event_ctl(int fd, void *private);
+
 /* Register a read handler, to be called when the connection is readable.
  * If NULL, the existing handler is removed.
  */
@@ -238,10 +245,10 @@ static int connSocketSetReadHandler(connection *conn, ConnectionCallbackFunc fun
     if (func == conn->read_handler) return C_OK;
 
     conn->read_handler = func;
-    if (!conn->read_handler)
-        aeDeleteFileEvent(server.el, conn->fd, AE_READABLE);
-    else if (aeCreateFileEvent(server.el, conn->fd, AE_READABLE, conn->type->ae_handler, conn) == AE_ERR)
-        return C_ERR;
+    //if (!conn->read_handler)
+       // aeDeleteFileEvent(server.el, conn->fd, AE_READABLE);
+    //else if (aeCreateFileEvent(server.el, conn->fd, AE_READABLE, conn->type->ae_handler, conn) == AE_ERR)
+        //return C_ERR;
     return C_OK;
 }
 

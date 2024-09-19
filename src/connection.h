@@ -128,6 +128,8 @@ struct connection {
     short int flags;
     short int refs;
     unsigned short int iovcnt;
+    void *upcall_container;
+    void *kernel_data;
     void *private_data;
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
