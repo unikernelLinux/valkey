@@ -6705,10 +6705,26 @@ serverTestProc *getTestProcByName(const char *name) {
 }
 #endif
 
+char one[] = "./valkey-server.static";
+char two[] = "valkey.conf";
+char *myarr[2];
+
+extern void set_bypass_limit(int val);
+extern void set_bypass_syscall(int val);
+
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
     char config_from_stdin = 0;
+
+    set_bypass_limit(10);
+    set_bypass_syscall(1);
+
+    myarr[0] = &one;
+    myarr[1] = &two;
+
+    argc = 2;
+    argv = &myarr;
 
 #ifdef SERVER_TEST
     monotonicInit(); /* Required for dict tests, that are relying on monotime during dict rehashing. */

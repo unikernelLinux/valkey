@@ -41,7 +41,7 @@ CXX:=$(shell sh -c 'type $${CXX%% *} >/dev/null 2>/dev/null && echo $(CXX) || ec
 OPTIMIZATION?=-O3
 WARNINGS=-Wall -Wextra -Werror -Wstrict-prototypes -Wwrite-strings -Wno-missing-field-initializers
 DEBUG_FLAGS?= -g -ggdb
-REAL_CFLAGS=$(OPTIMIZATION) -fPIC $(CPPFLAGS) $(CFLAGS) $(WARNINGS) $(DEBUG_FLAGS) $(PLATFORM_FLAGS)
+REAL_CFLAGS=$(OPTIMIZATION) $(CPPFLAGS) $(CFLAGS) $(WARNINGS) $(DEBUG_FLAGS) $(PLATFORM_FLAGS)
 REAL_LDFLAGS=$(LDFLAGS)
 
 DYLIBSUFFIX=so
