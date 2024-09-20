@@ -159,6 +159,10 @@ void *worker_thread(void *arg)
         struct worker *worker = (struct worker*)arg;
         void *ret = NULL;
 
+	// There are some bits fo thread state that are not setup appropriately
+	// yet so we need to ensure that we set these up before proceeding.
+	initSharedQueryBuf();
+
         register_ukl_handler_task();
 
         while (!worker->dying) {
