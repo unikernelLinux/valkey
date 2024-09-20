@@ -4658,9 +4658,12 @@ void processEventsWhileBlocked(void) {
 /* Return 1 if the client read is handled using threaded I/O.
  * 0 otherwise. */
 int postponeClientRead(client *c) {
+	return 0;
+	/*
     if (ProcessingEventsWhileBlocked) return 0;
 
     return (trySendReadToIOThreads(c) == C_OK);
+    */
 }
 
 int processIOThreadsReadDone(void) {

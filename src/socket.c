@@ -134,6 +134,8 @@ static void connSocketShutdown(connection *conn) {
     shutdown(conn->fd, SHUT_RDWR);
 }
 
+extern void release_ukl_event(void *event);
+
 /* Close the connection and free resources. */
 static void connSocketClose(connection *conn) {
     struct event_data *ev_data;
