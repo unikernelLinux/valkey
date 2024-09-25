@@ -94,7 +94,7 @@ void zlibc_free(void *ptr) {
 #include <threads.h>
 #endif
 
-#define MAX_THREADS_NUM (IO_THREADS_MAX_NUM + 3 + 1)
+#define MAX_THREADS_NUM (IO_THREADS_MAX_NUM + 3 + 2)
 /* A thread-local storage which keep the current thread's index in the used_memory_thread array. */
 static thread_local int thread_index = -1;
 /* Element in used_memory_thread array should only be written by a single thread which
