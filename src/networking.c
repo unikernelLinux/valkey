@@ -3101,6 +3101,9 @@ int processInputBuffer(client *c) {
 void readToQueryBuf(client *c) {
     int big_arg = 0;
     size_t qblen, readlen;
+    void *skb = NULL;
+    
+    c->skb_hold = &skb;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
     if (c->flag.close_asap) return;
@@ -3156,9 +3159,11 @@ void readToQueryBuf(client *c) {
         /* Read as much as possible from the socket to save read(2) system calls. */
         readlen = sdsavail(c->querybuf);
     }
+
     if (use_thread_shared_qb) serverAssert(c->querybuf == thread_shared_qb);
 
-    c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
+    //c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
+    c->nread = connZeroCopyRead(c->conn, c->skb_hold, readlen);
     if (c->nread <= 0) {
         return;
     }
@@ -3177,6 +3182,13 @@ void readToQueryBuf(client *c) {
             c->read_flags |= READ_FLAGS_QB_LIMIT_REACHED;
         }
     }
+}
+
+void processSKB(connection *conn){
+	client *c = connGetPrivateData(conn);
+	unsigned int offset;
+	//create get_skb_offset function later in kernel
+	offset = get_skb_offset(c->skb_hold, c->conn);
 }
 
 void readQueryFromClient(connection *conn) {

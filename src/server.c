@@ -6717,8 +6717,8 @@ int main(int argc, char **argv) {
     int j;
     char config_from_stdin = 0;
 
-    set_bypass_limit(10);
-    set_bypass_syscall(1);
+  //  set_bypass_limit(10);
+  //  set_bypass_syscall(1);
 
     myarr[0] = &one;
     myarr[1] = &two;

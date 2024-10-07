@@ -181,6 +181,20 @@ static int connSocketWritev(connection *conn, const struct iovec *iov, int iovcn
     return ret;
 }
 
+static int connSocketZeroCopyRead(connection *conn, void **skb_hold, size_t copy_len){
+	int ret = ukl_ksys_read(conn->fd, skb_hold, copy_len);
+	// after retrieving skb, check data len in skb that can be used,. e.g
+	// ret = skb->data_len --- verify which member to use
+	if(!(*skb_hold)){
+		conn->state = CONN_STATE_CLOSED;
+	} else if (ret <0 && errno != EAGAIN) {
+		conn->last_errno = errno;
+		if (errno != EINTR && conn->state == CONN_STATE_CONNECTED) conn->state = CONN_STATE_ERROR;
+	}
+	return ret;
+	
+
+}
 static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
     int ret = read(conn->fd, buf, buf_len);
     if (!ret) {
