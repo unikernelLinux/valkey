@@ -195,6 +195,10 @@ static int connSocketZeroCopyRead(connection *conn, void **skb_hold, size_t copy
 	
 
 }
+
+unsigned int getSkbOffset(void *skb, connection *conn){
+	return get_skb_offset(conn->fd, skb);
+}
 static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
     int ret = read(conn->fd, buf, buf_len);
     if (!ret) {

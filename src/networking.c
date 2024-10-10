@@ -2904,6 +2904,209 @@ void processMultibulkBuffer(client *c) {
     }
 }
 
+void processMultibulkBufferZC(client *c) {
+    char *newline = NULL;
+    int ok;
+    long long ll;
+    int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
+    int auth_required = c->read_flags & READ_FLAGS_AUTH_REQUIRED;
+    struct sk_buff *skb_hold = (struct sk_buff *) skb;
+    if (c->multibulklen == 0) {
+        /* The client should have been reset */
+        serverAssertWithInfo(c, NULL, c->argc == 0);
+
+        /* Multi bulk length cannot be read without a \r\n */
+        newline = strchr( c->skb_hold->data + c->offset, '\r');
+        if (newline == NULL) {
+            if (c->skb_len - c->offset > PROTO_INLINE_MAX_SIZE) {
+                c->read_flags |= READ_FLAGS_ERROR_BIG_MULTIBULK;
+            }
+            return;
+        }
+
+        /* Buffer should also contain \n */
+        if (newline - (c->skb_hold->data + c->offset) > (ssize_t)(c->skb_len - c->offset - 2)) return;
+
+        /* We know for sure there is a whole line since newline != NULL,
+         * so go ahead and find out the multi bulk length. */
+        serverAssertWithInfo(c, NULL, c->skb_hold->data[c->offset] == '*');
+        size_t multibulklen_slen = newline - (c->skb_hold->data + 1 + c->offset);
+        ok = string2ll(c->skb_hold->data + 1 + c->offset, multibulklen_slen, &ll);
+        if (!ok || ll > INT_MAX) {
+            c->read_flags |= READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN;
+            return;
+        } else if (ll > 10 && auth_required) {
+            c->read_flags |= READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN;
+            return;
+        }
+
+        c->offset = (newline - c->skb_hold->data) + 2;
+
+        if (ll <= 0) {
+            c->read_flags |= READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN;
+            return;
+        }
+
+        c->multibulklen = ll;
+
+        /* Setup argv array on client structure */
+        if (c->argv) zfree(c->argv);
+        c->argv_len = min(c->multibulklen, 1024);
+        c->argv = zmalloc(sizeof(robj *) * c->argv_len);
+        c->argv_len_sum = 0;
+
+        /* Per-slot network bytes-in calculation.
+         *
+         * We calculate and store the current command's ingress bytes under
+         * c->net_input_bytes_curr_cmd, for which its per-slot aggregation is deferred
+         * until c->slot is parsed later within processCommand().
+         *
+         * Calculation: For multi bulk buffer, we accumulate four factors, namely;
+         *
+         * 1) multibulklen_slen + 1
+         *    Cumulative string length (and not the value of) of multibulklen,
+         *    including +1 from RESP first byte.
+         * 2) bulklen_slen + c->argc
+         *    Cumulative string length (and not the value of) of bulklen,
+         *    including +1 from RESP first byte per argument count.
+         * 3) c->argv_len_sum
+         *    Cumulative string length of all argument vectors.
+         * 4) c->argc * 4 + 2
+         *    Cumulative string length of all white-spaces, for which there exists a total of
+         *    4 bytes per argument, plus 2 bytes from the leading '\r\n' from multibulklen.
+         *
+         * For example;
+         * Command) SET key value
+         * RESP) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
+         *
+         * 1) String length of "*3" is 2, obtained from (multibulklen_slen + 1).
+         * 2) String length of "$3" "$3" "$5" is 6, obtained from (bulklen_slen + c->argc).
+         * 3) String length of "SET" "key" "value" is 11, obtained from (c->argv_len_sum).
+         * 4) String length of all white-spaces "\r\n" is 14, obtained from (c->argc * 4 + 2).
+         *
+         * The 1st component is calculated within the below line.
+         * */
+        c->net_input_bytes_curr_cmd += (multibulklen_slen + 1);
+    }
+
+    serverAssertWithInfo(c, NULL, c->multibulklen > 0);
+    while (c->multibulklen) {
+        /* Read bulk length if unknown */
+        if (c->bulklen == -1) {
+            newline = strchr(c->skb_hold->data + c->offset, '\r');
+            if (newline == NULL) {
+                if (c->skb_len - c->offset > PROTO_INLINE_MAX_SIZE) {
+                    c->read_flags |= READ_FLAGS_ERROR_BIG_BULK_COUNT;
+                    return;
+                }
+                break;
+            }
+
+            /* Buffer should also contain \n */
+            if (newline - (c->skb_hold->data + c->offset) > (ssize_t)(c->skb_len - c->offset - 2)) break;
+
+            if (c->skb_hold->data[c->offset] != '$') {
+                c->read_flags |= READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER;
+                return;
+            }
+
+            size_t bulklen_slen = newline - (c->skb_hold->data + c->offset + 1);
+            ok = string2ll(c->skb_hold->data + c->offset + 1, bulklen_slen, &ll);
+            if (!ok || ll < 0 || (!(is_primary) && ll > server.proto_max_bulk_len)) {
+                c->read_flags |= READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN;
+                return;
+            } else if (ll > 16384 && auth_required) {
+                c->read_flags |= READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN;
+                return;
+            }
+
+            c->offset = newline - c->skb_hold->data + 2;
+            if (!(is_primary) && ll >= PROTO_MBULK_BIG_ARG) {
+                /* When the client is not a primary client (because primary
+                 * client's querybuf can only be trimmed after data applied
+                 * and sent to replicas).
+                 *
+                 * If we are going to read a large object from network
+                 * try to make it likely that it will start at c->querybuf
+                 * boundary so that we can optimize object creation
+                 * avoiding a large copy of data.
+                 *
+                 * But only when the data we have not parsed is less than
+                 * or equal to ll+2. If the data length is greater than
+                 * ll+2, trimming querybuf is just a waste of time, because
+                 * at this time the querybuf contains not only our bulk. */
+		    /*-------- CONTINUE FROM HERE -----------------*/
+		/*
+                if (c->skb_len - c->offset <= (size_t)ll + 2) {
+                    if (c->querybuf == thread_shared_qb) {
+		    */
+                        /* Let the client take the ownership of the shared buffer. */
+		    /*
+                        initSharedQueryBuf();
+                    }
+                    sdsrange(c->querybuf, c->qb_pos, -1);
+                    c->qb_pos = 0;
+		    */
+                    /* Hint the sds library about the amount of bytes this string is
+                     * going to contain. */
+                    /*c->querybuf = sdsMakeRoomForNonGreedy(c->querybuf, ll + 2 - sdslen(c->querybuf));
+		     */
+                    /* We later set the peak to the used portion of the buffer, but here we over
+                     * allocated because we know what we need, make sure it'll not be shrunk before used. */
+                    /*if (c->querybuf_peak < (size_t)ll + 2) c->querybuf_peak = ll + 2;
+		     * */
+                }
+            }
+            c->bulklen = ll;
+            /* Per-slot network bytes-in calculation, 2nd component.
+             * c->argc portion is deferred, as it may not have been fully populated at this point. */
+            c->net_input_bytes_curr_cmd += bulklen_slen;
+        }
+
+        /* Read bulk argument */
+        if (sdslen(c->skb_hold->data) - c->offset < (size_t)(c->bulklen + 2)) {
+            /* Not enough data (+2 == trailing \r\n) */
+            break;
+        } else {
+            /* Check if we have space in argv, grow if needed */
+            if (c->argc >= c->argv_len) {
+                c->argv_len = min(c->argv_len < INT_MAX / 2 ? c->argv_len * 2 : INT_MAX, c->argc + c->multibulklen);
+                c->argv = zrealloc(c->argv, sizeof(robj *) * c->argv_len);
+            }
+
+            /* Optimization: if a non-primary client's buffer contains JUST our bulk element
+             * instead of creating a new object by *copying* the sds we
+             * just use the current sds string. */
+            /*
+	        if (!is_primary && c->qb_pos == 0 && c->bulklen >= PROTO_MBULK_BIG_ARG &&
+                sdslen(c->querybuf) == (size_t)(c->bulklen + 2)) {
+                c->argv[c->argc++] = createObject(OBJ_STRING, c->querybuf);
+                c->argv_len_sum += c->bulklen;
+		*/
+                /*sdsIncrLen(c->querybuf, -2); */ /* remove CRLF */
+                /* Assume that if we saw a fat argument we'll see another one
+                 * likely... */
+                /*
+		 c->querybuf = sdsnewlen(SDS_NOINIT, c->bulklen + 2);
+                 sdsclear(c->querybuf);
+            } else {*/
+                c->argv[c->argc++] = createStringObject(c->querybuf + c->qb_pos, c->bulklen);
+                c->argv_len_sum += c->bulklen;
+                c->qb_pos += c->bulklen + 2;
+            /*}*/
+            c->bulklen = -1;
+            c->multibulklen--;
+        }
+    }
+
+    /* We're done when c->multibulk == 0 */
+    if (c->multibulklen == 0) {
+        /* Per-slot network bytes-in calculation, 3rd and 4th components.
+         * Here, the deferred c->argc from 2nd component is added, resulting in c->argc * 5 instead of * 4. */
+        c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 5 + 2));
+        c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
+    }
+}
 /* Perform necessary tasks after a command was executed:
  *
  * 1. The client is reset unless there are reasons to avoid doing it.
@@ -3101,9 +3304,88 @@ int processInputBuffer(client *c) {
 void readToQueryBuf(client *c) {
     int big_arg = 0;
     size_t qblen, readlen;
-    void *skb = NULL;
-    
-    c->skb_hold = &skb;
+
+    /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
+    if (c->flag.close_asap) return;
+
+    int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
+
+    readlen = PROTO_IOBUF_LEN;
+    qblen = c->querybuf ? sdslen(c->querybuf) : 0;
+    /* If this is a multi bulk request, and we are processing a bulk reply
+     * that is large enough, try to maximize the probability that the query
+     * buffer contains exactly the SDS string representing the object, even
+     * at the risk of requiring more read(2) calls. This way the function
+     * processMultiBulkBuffer() can avoid copying buffers to create the
+     * robj representing the argument. */
+
+    if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1 && c->bulklen >= PROTO_MBULK_BIG_ARG) {
+        ssize_t remaining = (size_t)(c->bulklen + 2) - (qblen - c->qb_pos);
+        big_arg = 1;
+
+        /* Note that the 'remaining' variable may be zero in some edge case,
+         * for example once we resume a blocked client after CLIENT PAUSE. */
+        if (remaining > 0) readlen = remaining;
+
+        /* Primary client needs expand the readlen when meet BIG_ARG(see #9100),
+         * but doesn't need align to the next arg, we can read more data. */
+        if (c->flag.primary && readlen < PROTO_IOBUF_LEN) readlen = PROTO_IOBUF_LEN;
+    }
+
+    if (c->querybuf == NULL) {
+        serverAssert(sdslen(thread_shared_qb) == 0);
+        c->querybuf = big_arg ? sdsempty() : thread_shared_qb;
+        qblen = sdslen(c->querybuf);
+    }
+
+    /* c->querybuf may be expanded. If so, the old thread_shared_qb will be released.
+     * Although we have ensured that c->querybuf will not be expanded in the current
+     * thread_shared_qb, we still add this check for code robustness. */
+    int use_thread_shared_qb = (c->querybuf == thread_shared_qb) ? 1 : 0;
+    if (!is_primary && // primary client's querybuf can grow greedy.
+        (big_arg || sdsalloc(c->querybuf) < PROTO_IOBUF_LEN)) {
+        /* When reading a BIG_ARG we won't be reading more than that one arg
+         * into the query buffer, so we don't need to pre-allocate more than we
+         * need, so using the non-greedy growing. For an initial allocation of
+         * the query buffer, we also don't wanna use the greedy growth, in order
+         * to avoid collision with the RESIZE_THRESHOLD mechanism. */
+        c->querybuf = sdsMakeRoomForNonGreedy(c->querybuf, readlen);
+        /* We later set the peak to the used portion of the buffer, but here we over
+         * allocated because we know what we need, make sure it'll not be shrunk before used. */
+        if (c->querybuf_peak < qblen + readlen) c->querybuf_peak = qblen + readlen;
+    } else {
+        c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
+
+        /* Read as much as possible from the socket to save read(2) system calls. */
+        readlen = sdsavail(c->querybuf);
+    }
+
+    if (use_thread_shared_qb) serverAssert(c->querybuf == thread_shared_qb);
+
+    c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
+    if (c->nread <= 0) {
+        return;
+    }
+
+    sdsIncrLen(c->querybuf, c->nread);
+    qblen = sdslen(c->querybuf);
+    if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
+    if (!is_primary) {
+        /* The commands cached in the MULTI/EXEC queue have not been executed yet,
+         * so they are also considered a part of the query buffer in a broader sense.
+         *
+         * For unauthenticated clients, the query buffer cannot exceed 1MB at most. */
+        size_t qb_memory = sdslen(c->querybuf) + c->mstate.argv_len_sums;
+        if (qb_memory > server.client_max_querybuf_len ||
+            (qb_memory > 1024 * 1024 && (c->read_flags & READ_FLAGS_AUTH_REQUIRED))) {
+            c->read_flags |= READ_FLAGS_QB_LIMIT_REACHED;
+        }
+    }
+}
+
+void readToQueryBufZC(client *c) {
+    int big_arg = 0;
+    size_t qblen, readlen;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
     if (c->flag.close_asap) return;
@@ -3163,10 +3445,11 @@ void readToQueryBuf(client *c) {
     if (use_thread_shared_qb) serverAssert(c->querybuf == thread_shared_qb);
 
     //c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
-    c->nread = connZeroCopyRead(c->conn, c->skb_hold, readlen);
+    c->nread = connZeroCopyRead(c->conn, &c->skb, readlen);
     if (c->nread <= 0) {
         return;
     }
+    c->skb_len = c->nread;
 
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);
@@ -3184,17 +3467,80 @@ void readToQueryBuf(client *c) {
     }
 }
 
-void processSKB(connection *conn){
-	client *c = connGetPrivateData(conn);
-	unsigned int offset;
-	//create get_skb_offset function later in kernel
-	offset = get_skb_offset(c->skb_hold, c->conn);
+
+void parseCommandZC(client *c) {
+    /* Determine request type when unknown. */
+    if (!c->reqtype) {
+        if (*(c->skb)[c->offset] == '*') {
+            c->reqtype = PROTO_REQ_MULTIBULK;
+        } else {
+            c->reqtype = PROTO_REQ_INLINE;
+        }
+    }
+
+    if (c->reqtype == PROTO_REQ_INLINE) {
+        processInlineBuffer(c);
+    } else if (c->reqtype == PROTO_REQ_MULTIBULK) {
+        processMultibulkBufferZC(c);
+    } else {
+        serverPanic("Unknown request type");
+    }
+
 }
 
-void readQueryFromClient(connection *conn) {
+void processSKB(connection *conn){
+        client *c = connGetPrivateData(conn);
+        //create get_skb_offset function later in kernel
+        c->offset = getSkbOffset(c->skb, c->conn);
+        //verify the field in skb struct that holds the data leb
+        while( offset <= *(c->skb)->len){
+                if(!canParseCommnad(c)){
+                        break;
+                }
+        c->read_flags = c->flag.primary ? READ_FLAGS_PRIMARY : 0;
+        c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
+
+        parseCommandZC(c);
+
+        if (handleParseResults(c) != PARSE_OK) {
+            break;
+        }
+
+	if (c->argc == 0) {
+            /* No command to process - continue parsing the query buf. */
+            continue;
+        }
+
+               /* We are finally ready to execute the command. */
+        if (processCommandAndResetClient(c) == C_ERR) {
+            /* If the client is no longer valid, we avoid exiting this
+             * loop and trimming the client buffer later. So we return
+             * ASAP in that case. */
+            return C_ERR;
+        }
+    }
+
+    return C_OK;
+
+}
+
+void readQueryFromClientZC(connection *conn) {
     client *c = connGetPrivateData(conn);
     /* Check if we can send the client to be handled by the IO-thread */
     if (postponeClientRead(c)) return;
+
+    if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
+
+    readToQueryBufZC(c);
+
+    if (handleReadResult(c) == C_OK) {
+        if (processSKB(c) == C_ERR) return;
+    }
+    ukl_zc_cleanup(c->conn, c->skb_len);
+    beforeNextClient(c);
+}
+void readQueryFromClient(connection *conn) {
+    client *c = connGetPrivateData(conn);
 
     if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
 
