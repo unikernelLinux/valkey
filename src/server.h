@@ -4039,6 +4039,16 @@ void debugPauseProcess(void);
 
 int iAmPrimary(void);
 
+struct event_data {
+       struct aeEventLoop *el;
+       struct connection *conn;
+};
+
+struct worker {
+        int dying;
+       long cpu;
+};
+
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
 

@@ -146,6 +146,38 @@ void connTypeCleanupAll(void) {
     }
 }
 
+void release_ukl_event(void *event);
+
+int redis_event_handler(void *data);
+void register_ukl_handler_task(void);
+void *workitem_queue_consume_event(void);
+void ukl_worker_sleep(void);
+
+void *worker_thread(void *arg)
+{
+        void *data;
+        struct worker *worker = (struct worker*)arg;
+        void *ret = NULL;
+
+	// There are some bits fo thread state that are not setup appropriately
+	// yet so we need to ensure that we set these up before proceeding.
+	initSharedQueryBuf();
+
+        register_ukl_handler_task();
+
+        while (!worker->dying) {
+                data = workitem_queue_consume_event();
+                if (data) {
+                       //printf("Handling event\n");
+                        redis_event_handler(data);
+                } else {
+                       //printf("No work, sleeping\n");
+                        ukl_worker_sleep();
+                }
+        }
+       return ret;
+}
+
 /* walk all the connection types until has pending data */
 int connTypeHasPendingData(void) {
     ConnectionType *ct;

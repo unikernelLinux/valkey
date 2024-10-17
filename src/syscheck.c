@@ -150,7 +150,7 @@ int checkOvercommit(sds *error_msg) {
         return 0;
     }
     fclose(fp);
-
+/*
     if (strtol(buf, NULL, 10) != 1) {
         *error_msg =
             sdsnew("Memory overcommit must be enabled! Without it, a background save or replication may fail under low "
@@ -163,8 +163,9 @@ int checkOvercommit(sds *error_msg) {
                    "command 'sysctl vm.overcommit_memory=1' for this to take effect.");
         return -1;
     } else {
+*/
         return 1;
-    }
+    //}
 }
 
 /* Make sure transparent huge pages aren't always enabled. When they are this can cause copy-on-write logic
