@@ -99,6 +99,7 @@ typedef struct ConnectionType {
     int (*write)(struct connection *conn, const void *data, size_t data_len);
     int (*writev)(struct connection *conn, const struct iovec *iov, int iovcnt);
     int (*read)(struct connection *conn, void *buf, size_t buf_len);
+    int (*zc_read)(struct connection *conn, void **skb_hold, size_t copy_len);
     int (*set_write_handler)(struct connection *conn, ConnectionCallbackFunc handler, int barrier);
     int (*set_read_handler)(struct connection *conn, ConnectionCallbackFunc handler);
     const char *(*get_last_error)(struct connection *conn);
@@ -233,6 +234,10 @@ static inline int connWritev(connection *conn, const struct iovec *iov, int iovc
 static inline int connRead(connection *conn, void *buf, size_t buf_len) {
     int ret = conn->type->read(conn, buf, buf_len);
     return ret;
+}
+static inline int connReadZC(connection *conn, void **skb_hold, size_t copy_len){
+	int ret = conn->type->zc_read(conn, skb_hold, copy_len);
+	return ret;
 }
 
 /* Register a write handler, to be called when the connection is writable.

@@ -1259,7 +1259,8 @@ typedef struct client {
     robj *lib_name;                      /* The client library name as set by CLIENT SETINFO. */
     robj *lib_ver;                       /* The client library version as set by CLIENT SETINFO. */
     sds querybuf;			 /* Buffer we use to accumulate client queries. */
-    void *skb;			 /* Holds the pointer to the skb containing data */
+    void *skb;			 	 /* Holds the pointer to the skb containing data */
+    unsigned char *skb_data;		 /* Pointer to the data in skb */
     unsigned int offset;		 /* Holds the offset for *skb_hold */
     unsigned int skb_len;		 /* Length of data in skb */
     size_t qb_pos;                       /* The position we have read in querybuf. */

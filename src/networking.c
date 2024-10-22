@@ -47,13 +47,20 @@ static void setProtocolError(const char *errstr, client *c);
 static void pauseClientsByClient(mstime_t end, int isPauseClientAll);
 int postponeClientRead(client *c);
 char *getClientSockname(client *c);
-
+void ukl_zc_cleanup(unsigned int fd, unsigned long used);
+unsigned int get_skb_offset(unsigned int fd, void *skb);
 void *do_event_ctl(int fd, void *private);
+unsigned char* get_skb_data( void *skb_hold);
+
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 __thread sds thread_shared_qb = NULL;
 
 typedef enum { PARSE_OK = 0, PARSE_ERR = -1, PARSE_NEEDMORE = -2 } parseResult;
+
+unsigned int getSkbOffset(void *skb, connection *conn){
+        return get_skb_offset(conn->fd, skb);
+}
 
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. This includes internal fragmentation. */
@@ -2515,6 +2522,9 @@ void resetClient(client *c) {
     c->flag.executing_command = 0;
     c->flag.replication_done = 0;
     c->net_output_bytes_curr_cmd = 0;
+    c->skb = NULL;
+    c->offset = 0;
+    c->skb_len = 0;
 
     /* Make sure the duration has been recorded to some command. */
     serverAssert(c->duration == 0);
@@ -2919,28 +2929,31 @@ void processMultibulkBufferZC(client *c) {
     long long ll;
     int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
     int auth_required = c->read_flags & READ_FLAGS_AUTH_REQUIRED;
-    struct sk_buff *skb_hold = (struct sk_buff *) skb;
+    char *skb_data = (char *) c->skb_data;
+    size_t offset = (size_t) c->offset;
+    size_t skb_len = (size_t) c->skb_len;
+    //struct sk_buff *skb_hold = (struct sk_buff *) skb;
     if (c->multibulklen == 0) {
         /* The client should have been reset */
         serverAssertWithInfo(c, NULL, c->argc == 0);
 
         /* Multi bulk length cannot be read without a \r\n */
-        newline = strchr( c->skb_hold->data + c->offset, '\r');
+        newline = strchr( skb_data + offset, '\r');
         if (newline == NULL) {
-            if (c->skb_len - c->offset > PROTO_INLINE_MAX_SIZE) {
+            if (skb_len - offset > PROTO_INLINE_MAX_SIZE) {
                 c->read_flags |= READ_FLAGS_ERROR_BIG_MULTIBULK;
             }
             return;
         }
 
         /* Buffer should also contain \n */
-        if (newline - (c->skb_hold->data + c->offset) > (ssize_t)(c->skb_len - c->offset - 2)) return;
+        if (newline - (skb_data + offset) > (ssize_t)(skb_len - offset - 2)) return;
 
         /* We know for sure there is a whole line since newline != NULL,
          * so go ahead and find out the multi bulk length. */
-        serverAssertWithInfo(c, NULL, c->skb_hold->data[c->offset] == '*');
-        size_t multibulklen_slen = newline - (c->skb_hold->data + 1 + c->offset);
-        ok = string2ll(c->skb_hold->data + 1 + c->offset, multibulklen_slen, &ll);
+        serverAssertWithInfo(c, NULL, skb_data[offset] == '*');
+        size_t multibulklen_slen = newline - (skb_data + 1 + offset);
+        ok = string2ll(skb_data + 1 + offset, multibulklen_slen, &ll);
         if (!ok || ll > INT_MAX) {
             c->read_flags |= READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN;
             return;
@@ -2949,7 +2962,7 @@ void processMultibulkBufferZC(client *c) {
             return;
         }
 
-        c->offset = (newline - c->skb_hold->data) + 2;
+        offset = (newline - skb_data) + 2;
 
         if (ll <= 0) {
             c->read_flags |= READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN;
@@ -3002,9 +3015,9 @@ void processMultibulkBufferZC(client *c) {
     while (c->multibulklen) {
         /* Read bulk length if unknown */
         if (c->bulklen == -1) {
-            newline = strchr(c->skb_hold->data + c->offset, '\r');
+            newline = strchr(skb_data + offset, '\r');
             if (newline == NULL) {
-                if (c->skb_len - c->offset > PROTO_INLINE_MAX_SIZE) {
+                if (skb_len - offset > PROTO_INLINE_MAX_SIZE) {
                     c->read_flags |= READ_FLAGS_ERROR_BIG_BULK_COUNT;
                     return;
                 }
@@ -3012,15 +3025,15 @@ void processMultibulkBufferZC(client *c) {
             }
 
             /* Buffer should also contain \n */
-            if (newline - (c->skb_hold->data + c->offset) > (ssize_t)(c->skb_len - c->offset - 2)) break;
+            if (newline - (skb_data + offset) > (ssize_t)(skb_len - offset - 2)) break;
 
-            if (c->skb_hold->data[c->offset] != '$') {
+            if (skb_data[offset] != '$') {
                 c->read_flags |= READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER;
                 return;
             }
 
-            size_t bulklen_slen = newline - (c->skb_hold->data + c->offset + 1);
-            ok = string2ll(c->skb_hold->data + c->offset + 1, bulklen_slen, &ll);
+            size_t bulklen_slen = newline - (skb_data + offset + 1);
+            ok = string2ll(skb_data + offset + 1, bulklen_slen, &ll);
             if (!ok || ll < 0 || (!(is_primary) && ll > server.proto_max_bulk_len)) {
                 c->read_flags |= READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN;
                 return;
@@ -3029,7 +3042,7 @@ void processMultibulkBufferZC(client *c) {
                 return;
             }
 
-            c->offset = newline - c->skb_hold->data + 2;
+            offset = newline - skb_data + 2;
             if (!(is_primary) && ll >= PROTO_MBULK_BIG_ARG) {
                 /* When the client is not a primary client (because primary
                  * client's querybuf can only be trimmed after data applied
@@ -3063,8 +3076,8 @@ void processMultibulkBufferZC(client *c) {
                     /* We later set the peak to the used portion of the buffer, but here we over
                      * allocated because we know what we need, make sure it'll not be shrunk before used. */
                     /*if (c->querybuf_peak < (size_t)ll + 2) c->querybuf_peak = ll + 2;
-		     * */
-                }
+		     
+                }*/
             }
             c->bulklen = ll;
             /* Per-slot network bytes-in calculation, 2nd component.
@@ -3073,7 +3086,7 @@ void processMultibulkBufferZC(client *c) {
         }
 
         /* Read bulk argument */
-        if (sdslen(c->skb_hold->data) - c->offset < (size_t)(c->bulklen + 2)) {
+        if (skb_len - offset < (size_t)(c->bulklen + 2)) {
             /* Not enough data (+2 == trailing \r\n) */
             break;
         } else {
@@ -3099,9 +3112,9 @@ void processMultibulkBufferZC(client *c) {
 		 c->querybuf = sdsnewlen(SDS_NOINIT, c->bulklen + 2);
                  sdsclear(c->querybuf);
             } else {*/
-                c->argv[c->argc++] = createStringObject(c->querybuf + c->qb_pos, c->bulklen);
+                c->argv[c->argc++] = createStringObject(skb_data + offset, c->bulklen);
                 c->argv_len_sum += c->bulklen;
-                c->qb_pos += c->bulklen + 2;
+                offset += c->bulklen + 2;
             /*}*/
             c->bulklen = -1;
             c->multibulklen--;
@@ -3115,6 +3128,7 @@ void processMultibulkBufferZC(client *c) {
         c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 5 + 2));
         c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
     }
+    c->offset = (unsigned int) offset;
 }
 /* Perform necessary tasks after a command was executed:
  *
@@ -3454,7 +3468,7 @@ void readToQueryBufZC(client *c) {
     if (use_thread_shared_qb) serverAssert(c->querybuf == thread_shared_qb);
 
     //c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
-    c->nread = connZeroCopyRead(c->conn, &c->skb, readlen);
+    c->nread = connReadZC(c->conn, &c->skb, readlen);
     if (c->nread <= 0) {
         return;
     }
@@ -3480,7 +3494,7 @@ void readToQueryBufZC(client *c) {
 void parseCommandZC(client *c) {
     /* Determine request type when unknown. */
     if (!c->reqtype) {
-        if (*(c->skb)[c->offset] == '*') {
+        if (c->skb_data[c->offset] == '*') {
             c->reqtype = PROTO_REQ_MULTIBULK;
         } else {
             c->reqtype = PROTO_REQ_INLINE;
@@ -3497,13 +3511,11 @@ void parseCommandZC(client *c) {
 
 }
 
-void processSKB(connection *conn){
-        client *c = connGetPrivateData(conn);
-        //create get_skb_offset function later in kernel
+int processSKB(client *c){
+
         c->offset = getSkbOffset(c->skb, c->conn);
-        //verify the field in skb struct that holds the data leb
-        while( offset <= *(c->skb)->len){
-                if(!canParseCommnad(c)){
+        while(c->skb && c->offset <= c->skb_len){
+                if(!canParseCommand(c)){
                         break;
                 }
         c->read_flags = c->flag.primary ? READ_FLAGS_PRIMARY : 0;
@@ -3541,6 +3553,8 @@ void readQueryFromClientZC(connection *conn) {
     if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
 
     readToQueryBufZC(c);
+    
+    c->skb_data = get_skb_data(c->skb);
 
     if (handleReadResult(c) == C_OK) {
         if (processSKB(c) == C_ERR) return;
@@ -4954,7 +4968,7 @@ int redis_event_handler(void *data) {
                printf("Got empty event data, returning\n");
                return 0;
        }
-       readQueryFromClient(evdata->conn);
+       readQueryFromClientZC(evdata->conn);
        handleClientsWithPendingWrites();
 
        return 0;
