@@ -3551,16 +3551,21 @@ void readQueryFromClientZC(connection *conn) {
     if (postponeClientRead(c)) return;
 
     if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
-
+    printf("strating read\n");
     readToQueryBufZC(c);
+    printf("ZC read done, getting data\n");
     
     c->skb_data = get_skb_data(c->skb);
+    printf("Data pointer extracted\n");
 
     if (handleReadResult(c) == C_OK) {
         if (processSKB(c) == C_ERR) return;
     }
-    ukl_zc_cleanup(c->conn, c->skb_len);
+    printf("Data Read\n");
+    ukl_zc_cleanup(conn->fd, c->skb_len);
+    printf("Data Cleaned\n");
     beforeNextClient(c);
+    printf("Before Next Client completed \n");
 }
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
@@ -4969,7 +4974,9 @@ int redis_event_handler(void *data) {
                return 0;
        }
        readQueryFromClientZC(evdata->conn);
+       printf("Handling Pending Writes\n");
        handleClientsWithPendingWrites();
+       printf("Completed Pending Writes\n");
 
        return 0;
 }
