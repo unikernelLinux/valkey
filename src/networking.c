@@ -2522,10 +2522,6 @@ void resetClient(client *c) {
     c->flag.executing_command = 0;
     c->flag.replication_done = 0;
     c->net_output_bytes_curr_cmd = 0;
-    c->skb = NULL;
-    c->offset = 0;
-    c->skb_len = 0;
-
     /* Make sure the duration has been recorded to some command. */
     serverAssert(c->duration == 0);
 #ifdef LOG_REQ_RES
@@ -3468,6 +3464,11 @@ void readToQueryBufZC(client *c) {
     if (use_thread_shared_qb) serverAssert(c->querybuf == thread_shared_qb);
 
     //c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
+    printf("About to read\n");
+    if (c->conn == NULL)
+	    printf("Conn is NULL  (2)\n");
+    else
+	    printf("Conn is not NULL (2)\n");
     c->nread = connReadZC(c->conn, &c->skb, readlen);
     if (c->nread <= 0) {
         return;
@@ -3552,11 +3553,16 @@ void readQueryFromClientZC(connection *conn) {
 
     if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
     printf("strating read\n");
+    if(c->conn == NULL)
+	    printf("Conn is NULL (1)\n");
+    else
+	    printf("Conn is not NULL (1)\n");
     readToQueryBufZC(c);
     printf("ZC read done, getting data\n");
     
     c->skb_data = get_skb_data(c->skb);
-    printf("Data pointer extracted\n");
+    printf("DAta pointer extracted\n");
+    //printf("Data pointer extracted: %s\n", (char *)c->skb_data);
 
     if (handleReadResult(c) == C_OK) {
         if (processSKB(c) == C_ERR) return;
@@ -4973,6 +4979,8 @@ int redis_event_handler(void *data) {
                printf("Got empty event data, returning\n");
                return 0;
        }
+       if(evdata->conn != NULL)
+	       printf("CONN IS NULL\n");
        readQueryFromClientZC(evdata->conn);
        printf("Handling Pending Writes\n");
        handleClientsWithPendingWrites();

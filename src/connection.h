@@ -236,6 +236,10 @@ static inline int connRead(connection *conn, void *buf, size_t buf_len) {
     return ret;
 }
 static inline int connReadZC(connection *conn, void **skb_hold, size_t copy_len){
+	if(conn == NULL)
+		printf("Conn is NULL\n");
+	else if(conn->type == NULL)
+		printf("Conn type is null\n");
 	int ret = conn->type->zc_read(conn, skb_hold, copy_len);
 	return ret;
 }

@@ -192,7 +192,10 @@ static int connSocketWritev(connection *conn, const struct iovec *iov, int iovcn
 }
 
 static int connSocketZeroCopyRead(connection *conn, void **skb_hold, size_t copy_len){
-	int ret = ukl_ksys_read(conn->fd, skb_hold, copy_len);
+
+	int ret;
+	printf("returned from ukl_ksys_read\n");
+	ret = ukl_ksys_read(conn->fd, skb_hold, copy_len);
 	// after retrieving skb, check data len in skb that can be used,. e.g
 	// ret = skb->data_len --- verify which member to use
 	if(!ret){
