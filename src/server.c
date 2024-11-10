@@ -57,6 +57,7 @@
 #include <sys/resource.h>
 #include <sys/uio.h>
 #include <sys/un.h>
+#include <stdio.h>
 #include <limits.h>
 #include <float.h>
 #include <math.h>
@@ -6710,6 +6711,7 @@ int main(int argc, char **argv) {
     int j;
     char config_from_stdin = 0;
 
+		printf("HELLO FROM VALKEY!");
 #ifdef SERVER_TEST
     monotonicInit(); /* Required for dict tests, that are relying on monotime during dict rehashing. */
     if (argc >= 3 && !strcasecmp(argv[1], "test")) {

@@ -143,8 +143,10 @@ FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
 ifeq ($(SERVER_TEST),yes)
 	FINAL_CFLAGS +=-DSERVER_TEST=1
 endif
-FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(SERVER_LDFLAGS) $(DEBUG)
-FINAL_LIBS=-lm
+FINAL_LDFLAGS=$(LDFLAGS) $(SERVER_LDFLAGS) $(DEBUG) \
+	      -Wl,-rpath-link=$(shell pwd)/../../.. -L$(shell pwd)/../../.. \
+	      -Wl,-rpath=/data -Wl,--dynamic-linker=/data/ld-linux-x86-64.so.2
+FINAL_LIBS=-lm -luklsyms -lpthread
 DEBUG=-g -ggdb
 
 # Linux ARM32 needs -latomic at linking time

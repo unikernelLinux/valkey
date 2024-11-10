@@ -1,0 +1,17 @@
+    [34;1mLINK[0m [37;1mvalkey-server[0m
+    [34;1mLINK[0m [37;1mvalkey-cli[0m
+    [34;1mLINK[0m [37;1mvalkey-benchmark[0m
+/usr/bin/ld: anet.o: relocation R_X86_64_32S against `.rodata.str1.8' can not be used when making a PIE object; recompile with -fPIE
+/usr/bin/ld: failed to set dynamic section sizes: bad value
+collect2: error: ld returned 1 exit status
+make[1]: *** [Makefile:521: valkey-cli] Error 1
+make[1]: *** Waiting for unfinished jobs....
+/usr/bin/ld: ae.o: relocation R_X86_64_32S against `.rodata.str1.1' can not be used when making a PIE object; recompile with -fPIE
+/usr/bin/ld: failed to set dynamic section sizes: bad value
+collect2: error: ld returned 1 exit status
+make[1]: *** [Makefile:525: valkey-benchmark] Error 1
+/usr/bin/ld: threads_mngr.o: relocation R_X86_64_32S against `.rodata.str1.8' can not be used when making a PIE object; recompile with -fPIE
+/usr/bin/ld: failed to set dynamic section sizes: bad value
+collect2: error: ld returned 1 exit status
+make[1]: *** [Makefile:489: valkey-server] Error 1
+make: *** [Makefile:6: all] Error 2
