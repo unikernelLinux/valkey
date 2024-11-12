@@ -134,17 +134,10 @@ static void connSocketShutdown(connection *conn) {
     shutdown(conn->fd, SHUT_RDWR);
 }
 
-extern void release_ukl_event(void *event);
-
 /* Close the connection and free resources. */
 static void connSocketClose(connection *conn) {
-    struct event_data *ev_data;
     if (conn->fd != -1) {
         //aeDeleteFileEvent(server.el, conn->fd, AE_READABLE | AE_WRITABLE);
-	ev_data = (struct event_data *)conn->upcall_container;
-	// Call kernel unregister function
-	release_ukl_event(conn->kernel_data);
-	zfree(ev_data);
         close(conn->fd);
         conn->fd = -1;
     }

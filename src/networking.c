@@ -41,14 +41,12 @@
 #include <math.h>
 #include <ctype.h>
 #include <stdatomic.h>
-#include <pthread.h>
+#include <upcall.h>
 
 static void setProtocolError(const char *errstr, client *c);
 static void pauseClientsByClient(mstime_t end, int isPauseClientAll);
 int postponeClientRead(client *c);
 char *getClientSockname(client *c);
-
-void *do_event_ctl(int fd, void *private);
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 __thread sds thread_shared_qb = NULL;
@@ -1334,6 +1332,19 @@ int clientHasPendingReplies(client *c) {
     }
 }
 
+static void valkey_event_handler(void *data) {
+       connection *conn = (connection*)data;
+
+       if (!data) {
+               printf("Got empty event data, returning\n");
+               return;
+       }
+       readQueryFromClient(conn);
+       handleClientsWithPendingWrites();
+
+       return;
+}
+
 void clientAcceptHandler(connection *conn) {
     client *c = connGetPrivateData(conn);
 
@@ -1381,11 +1392,7 @@ void clientAcceptHandler(connection *conn) {
     server.stat_numconnections++;
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 
-    struct event_data *ev_data = zmalloc(sizeof(struct event_data));
-    ev_data->el = server.el;
-    ev_data->conn = conn;
-    conn->upcall_container = (void *)ev_data;
-    conn->kernel_data = (void *)do_event_ctl(conn->fd, (void *)ev_data);
+    register_event(conn->fd, READ, valkey_event_handler, (void *)conn);
 }
 
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
@@ -4587,19 +4594,6 @@ uint32_t isPausedActionsWithUpdate(uint32_t actions_bitmask) {
     if (!(server.paused_actions & actions_bitmask)) return 0;
     updatePausedActions();
     return (server.paused_actions & actions_bitmask);
-}
-
-int redis_event_handler(void *data) {
-       struct event_data *evdata = (struct event_data*)data;
-
-       if (!evdata) {
-               printf("Got empty event data, returning\n");
-               return 0;
-       }
-       readQueryFromClient(evdata->conn);
-       handleClientsWithPendingWrites();
-
-       return 0;
 }
 
 /* This function is called by the server in order to process a few events from

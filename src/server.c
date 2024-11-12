@@ -63,8 +63,8 @@
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
-#include <pthread.h>
 #include <stdlib.h>
+#include <upcall.h>
 
 #ifdef __linux__
 #include <sys/mman.h>
@@ -6711,15 +6711,6 @@ char one[] = "./valkey-server.static";
 char two[] = "valkey.conf";
 char *myarr[2];
 
-void init_event_workitem_queue(void);
-void init_upcall_handler(int concurrency_model);
-void *worker_thread(void *arg);
-
-#ifdef UKL_CONN_MODEL
-#undef UKL_CONN_MODEL
-#endif
-#define UKL_CONN_MODEL 2
-
 extern void set_bypass_limit(int val);
 extern void set_bypass_syscall(int val);
 
@@ -6727,9 +6718,6 @@ int main(int argc, char **argv) {
     struct timeval tv;
     int j;
     char config_from_stdin = 0;
-    pthread_t events, main_thread;
-    pthread_attr_t event_attrs;
-    struct worker worker;
 
     //set_bypass_limit(10);
     //set_bypass_syscall(1);
@@ -7074,24 +7062,7 @@ int main(int argc, char **argv) {
     serverSetCpuAffinity(server.server_cpulist);
     setOOMScoreAdj(-1);
 
-    init_upcall_handler(UKL_CONN_MODEL);
-
-    /* Start UKL event handler thread */
-    if (pthread_attr_init(&event_attrs)) {
-	perror("Failed to initialize pthread_attrs");
-	exit(1);
-    }
-
-    if (pthread_attr_setdetachstate(&event_attrs, PTHREAD_CREATE_DETACHED)) {
-	perror("Cannot set detatched state attr");
-	exit(1);
-    }
-
-    worker.dying = 0;
-    if (pthread_create(&events, &event_attrs, worker_thread, &worker)) {
-	perror("Failed to create event thread");
-	exit(1);
-    }
+    init_event_handler(SINGLE, 1);
 
     printf("Done starting threads, entering main loop.\n");
 
