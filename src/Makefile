@@ -31,7 +31,7 @@ endif
 ifneq ($(OPTIMIZATION),-O0)
 	OPTIMIZATION+=-fno-omit-frame-pointer
 endif
-DEPENDENCY_TARGETS=hiredis linenoise lua hdr_histogram fpconv
+DEPENDENCY_TARGETS=hiredis linenoise hdr_histogram fpconv lua
 NODEPS:=clean distclean
 
 # Default settings
