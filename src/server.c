@@ -7062,7 +7062,7 @@ int main(int argc, char **argv) {
     serverSetCpuAffinity(server.server_cpulist);
     setOOMScoreAdj(-1);
 
-    init_event_handler(SINGLE, 1);
+    init_event_handler(SINGLE, 1, initSharedQueryBuf);
 
     printf("Done starting threads, entering main loop.\n");
 
