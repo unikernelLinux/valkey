@@ -4974,13 +4974,14 @@ uint32_t isPausedActionsWithUpdate(uint32_t actions_bitmask) {
 
 int redis_event_handler(void *data) {
        struct event_data *evdata = (struct event_data*)data;
-
+       client *c;
        if (!evdata) {
                printf("Got empty event data, returning\n");
                return 0;
        }
-       if(evdata->conn != NULL)
-	       printf("CONN IS NULL\n");
+       c = connGetPrivateData(evdata->conn);
+       if(!(c->conn))
+	       return 0;
        readQueryFromClientZC(evdata->conn);
        printf("Handling Pending Writes\n");
        handleClientsWithPendingWrites();
